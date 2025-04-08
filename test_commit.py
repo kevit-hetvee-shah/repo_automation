@@ -20,33 +20,25 @@ load_dotenv()
 
 
 class DebugCallbackHandler(BaseCallbackHandler):
+    def on_llm_start(self, serialized, prompts, **kwargs):
+        print("Prompt sent to LLM:")
+        for prompt in prompts:
+            print(prompt)
 
     def on_llm_end(self, response, **kwargs):
-        print("-----------------Response from LLM:-----------------")
-        # print(f"RESPONSE: {response}")
-        # print("******************************************************")
+        print("Response from LLM:")
+        print(response)
 
 
+# llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=os.environ.get('GOOGLE_API_KEY'))
 llm = ChatGoogleGenerativeAI(
-    model="gemini-2.0-flash-lite",
+    model="gemini-2.0-flash-001",
     temperature=0,
     max_tokens=None,
     timeout=None,
     max_retries=2,
     google_api_key=os.environ.get('GOOGLE_API_KEY'),
-    callbacks=[DebugCallbackHandler()],
-    verbose=True,
-    # other params...
-)
-
-llm2 = ChatGoogleGenerativeAI(
-    model="gemini-1.5-pro",
-    temperature=0,
-    max_tokens=None,
-    timeout=None,
-    max_retries=2,
-    google_api_key=os.environ.get('GOOGLE_API_KEY'),
-    callbacks=[DebugCallbackHandler()],
+    # callbacks=[DebugCallbackHandler()],
     verbose=True,
     # other params...
 )
@@ -95,7 +87,7 @@ def create_readme_file(readme_data: CreateReadmeFileSchema):
     """
     Tool to create the content of README file.
     """
-    print(f"-----------README DATA-----------\n{readme_data} ")
+    print(readme_data, "README DATA")
     repo_name = readme_data.repo_name
     extra_info = readme_data.extra_info
     content = f"""
@@ -129,7 +121,7 @@ def create_commit(commit_data: CreateCommitSchema):
     """
     Tool to create a commit in a GitHub repository with given file path and content.
     """
-    print(f"---------COMMIT DATA---------------\n{commit_data} ")
+    print(commit_data, "COMMIT DATA")
     repo_name = commit_data.repo_name
     commit_message = commit_data.commit_message
     branch_name = commit_data.branch_name
@@ -156,7 +148,7 @@ def create_github_repo(repo_data: RepoCreationSchema):
     """
     Tool to create a GitHub repository using given data.
     """
-    print(f"---------------REPO DATA--------------\n{repo_data} ")
+    print(repo_data, "REPO DATA")
     repo_name = repo_data.repo_name
     organization_name = repo_data.organization_name
     description = repo_data.description
@@ -164,6 +156,7 @@ def create_github_repo(repo_data: RepoCreationSchema):
     auth = Auth.Token(os.environ.get("GITHUB_ACCESS_TOKEN"))
     github_obj = Github(auth=auth)
     repos = len([i for i in github_obj.get_user().get_repos()])
+    print(f"Currently {repos} exists.")
     if organization_name:
         organization = github_obj.get_organization(organization_name)
         try:
@@ -206,55 +199,41 @@ Do not include data from any external context. Operate as a standalone assistant
 # Primary Instructions
 1. You must use the create_readme_file tool to create the content of the README file.
 2. Make sure the content is in markdown format.
-3. Take all the necessary field values from the state that is passed to you.
+3. Take all the necessary field values from the current state that is passed to you.
 4. You must return following fields in the response as it will be used by create_commit_agent to create commit of generated files.
     file_name: Name of the file
     file_path: ./Name of the file
     file_content: The content generated 
-    branch_name: The name of the branch where the file will be created. This will be provided by the user.
-    commit_message: The commit message for the commit. This will be provided by the user. If not provided, use "Initial commit" as the commit message.
-    
+
 ## field names:
 - repo_name: name of the repository and its required.
 - extra_info: any extra information that is required to be included in the README file.
 
 # NOTE:
 - Pass the file_name, file_path and file_content in the response as it will be used by create_commit_agent to create commit of generated files.
-- Once the content is generated, you must use the create_commit_agent to create a commit of the generated file.
-
-
-# Example Output:
-Make sure the JSON object is correctly formatted and contains no placeholder values (e.g., "unknown").
-
-{
-    "repo_name": "abc",
-    "file_path": "./file",
-    "file_content": "This is the readme file content",
-}
 """
 
 create_commit_prompt = """# CreateCommitAgent Instructions
 
-You are an agent responsible for creating a commit with the file in a repository.
+You are an agent responsible for creating a README file for given repo and then commit the README file in a repository.
+Your responses should only address the creation of README file and commit process. 
 
 # Primary Instructions
-0. You need to create a commit with the file in a repository.
-1. You will get all the necessary field values from the state that is passed to you.
-2. You must use the details from the state to create the commit.
-3. All the necessary field values are already provided to you. Check them before coming to any conclusion.
-4. You must use the create_commit tool to create the commit.
-5. Make sure the commit message reflects in the commit.
+0. Generate the README file content and commit it in the repository.
+1. You will get all the necessary field values from the current state that is passed to you.
+2. You must use the details from the current state to create the commit.
+3. You must use the create_commit tool to create the commit.
+4. Make sure the commit message reflects in the commit.
 
 ## field names:
-- repo_name: name of the repository and its required. You can find it in the state.
-- file_path: path where the README file will be created. You can find it in the state.
-- file_content: content of the file. You can find it in the state.
-- commit_message: message for the commit. It will provided by user. You can find it in the state.
-- branch_name: name of the branch where the commit will be made. It will provided by user. You can find it in the state.
+- repo_name: name of the repository and its required.
+- file_path: path where the README file will be created.
+- file_content: content of the file.
+- commit_message: message for the commit.
+- branch_name: name of the branch where the commit will be made.
 
 # NOTE:
-- You muse use all the necessary field values from the state that is passed to you.
-- You must use create_commit tool to create the commit.
+- You muse use all the necessary field values from the current state that is passed to you.
 """
 
 create_repo_prompt = """# CreateRepoAgent Instructions
@@ -299,24 +278,17 @@ You are an agent responsible for generating the code. You will be given a prompt
 def readme_agent(state: SharedState):
     agent = create_react_agent(llm, tools=[create_readme_file], prompt=readme_agent_prompt,
                                response_format=CreateCommitSchema)
-    print(f"---------- README AGENT STATE------------: \n{state}")
     result = agent.invoke(state)
-    print(f"----------RESULT------------: \n{result}")
     return Command(
-        update={"messages": result['messages']},
+        update={"messages": result['messages'], "file_path": "./README.md", "file_content": "ABCBBYEF"},
         goto="create_commit",
     )
 
 
 def create_commit_agent(state: SharedState):
-    agent = create_react_agent(llm2, tools=[create_commit], prompt=create_commit_prompt)
-    print(f"---------- COMMIT AGENT STATE------------: \n{state}")
+    agent = create_react_agent(llm, tools=[create_commit], prompt=create_commit_prompt)
+    breakpoint()
     result = agent.invoke(state)
-    print(f"----------RESULT------------: \n{result}")
-    retry_call = result['messages'][-1].tool_calls and not result['messages'][-1].content
-    while not retry_call:
-        result = agent.invoke(state)
-        retry_call = result['messages'][-1].tool_calls and not result['messages'][-1].content
     return Command(
         update={"messages": result['messages']},
         goto="generate_code",
@@ -326,20 +298,16 @@ def create_commit_agent(state: SharedState):
 def create_repo_agent(state: SharedState):
     agent = create_react_agent(llm, tools=[create_github_repo], prompt=create_repo_prompt,
                                response_format=RepoCreationSchema)
-    print(f"----------REPO AGENT STATE------------: \n{state}")
     result = agent.invoke(state)
-    print(f"----------RESULT------------: \n{result}")
     return Command(
         update={"messages": result['messages']},
-        goto="create_readme_file",
+        goto="create_commit",
     )
 
 
 def generate_code_agent(state: SharedState):
     agent = create_react_agent(llm, tools=[], prompt=generate_code_prompt)
-    print(f"----------GENERATE CODE STATE------------: \n{state}")
     result = agent.invoke(state)
-    print(f"----------RESULT------------: \n{result}")
     breakpoint()
     return Command(
         update={"messages": result['messages']},
@@ -348,7 +316,7 @@ def generate_code_agent(state: SharedState):
 
 
 builder = StateGraph(SharedState)
-builder.add_node("create_readme_file", readme_agent)
+# builder.add_node("create_readme_file", readme_agent)
 builder.add_node("create_commit", create_commit_agent)
 builder.add_node("create_repo", create_repo_agent)
 builder.add_node("generate_code", generate_code_agent)
@@ -368,16 +336,10 @@ for q in graph.stream({
         HumanMessage(role="user", content=query)
     ],
     "repo_name": "fibonacci_series",
-    "file_path": "./README.md",
-    "file_content": "This is a fibonacci series repo.",
-    "commit_message": "Initial commit",
-    "branch_name": "main",
-    "private": True,
-    "organization_name": None,
-    "description": "This is a fibonacci series repo.",
-    "extra_info": "This is a fibonacci series repo.",
-    "success_messages": None,
-}):
-    print(f"----------STREAM------------\n")
+
+}, stream_mode="values"):
+    # }):
+    print(f"QQQQQL {q}")
+    print("\n")
 
 # update={"messages": state['messages'] + [AIMessage(content=result['messages'][-1].content)]},
