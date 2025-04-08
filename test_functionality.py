@@ -184,7 +184,7 @@ def create_github_repo(repo_data: RepoCreationSchema):
             repo = existing_repo
         except UnknownObjectException as e:
             new_repo = user.create_repo(name=repo_name,
-                                        description=description,
+                                        description=description if description else "Repository created by langgraph",
                                         private=private)
             repo = new_repo
     github_obj.close()
@@ -283,6 +283,12 @@ generate_code_prompt = """## GenerateCodeAgent Instructions
 
 You are an agent responsible for generating the code. You will be given a prompt. For that prompt, you will generate the code. There should be no errors in the code.
 
+You must return following data:
+- file_name: Name of the file. This will be provided by the user. If not provided, use "main.py" as the file name.
+- file_path: Path of the file. Path will always be "./file_name". This will be provided by the user. If not provided, use "./main.py" as the file path.
+- file_content: The content generated
+- branch_name: The name of the branch where the file will be created. This will be provided by the user.
+- commit_message: The commit message for the commit. This will be provided by the user. If not provided, use "Initial commit" as the commit message.
 
 # Primary Instructions
 1. You must generate code in python language only.
@@ -293,9 +299,12 @@ You are an agent responsible for generating the code. You will be given a prompt
 
 
 ## field names:
-- prompt: The prompt for which the code will be generated."""
+- prompt: The prompt for which the code will be generated.
 
-
+# NOTE:
+- You must use all the necessary field values from the state that is passed to you.
+- You must return the file_name, file_path, file_content, branch_name and commit_message in the response as it will be used by create_commit_agent to create commit of generated files.
+"""
 def readme_agent(state: SharedState):
     agent = create_react_agent(llm, tools=[create_readme_file], prompt=readme_agent_prompt,
                                response_format=CreateCommitSchema)
@@ -319,7 +328,8 @@ def create_commit_agent(state: SharedState):
         retry_call = result['messages'][-1].tool_calls and not result['messages'][-1].content
     return Command(
         update={"messages": result['messages']},
-        goto="generate_code",
+        # goto="generate_code",
+        goto=END,
     )
 
 
@@ -331,7 +341,8 @@ def create_repo_agent(state: SharedState):
     print(f"----------RESULT------------: \n{result}")
     return Command(
         update={"messages": result['messages']},
-        goto="create_readme_file",
+        # goto="create_readme_file",
+        goto="generate_code",
     )
 
 
@@ -340,10 +351,10 @@ def generate_code_agent(state: SharedState):
     print(f"----------GENERATE CODE STATE------------: \n{state}")
     result = agent.invoke(state)
     print(f"----------RESULT------------: \n{result}")
-    breakpoint()
     return Command(
         update={"messages": result['messages']},
-        goto=END,
+        # goto=END,
+        goto="create_commit",
     )
 
 
@@ -363,20 +374,54 @@ query = """
      file should be created in the main branch. 
      The commit message should be 'Initial commit'. 
      The repo should be private with no organization."""
-for q in graph.stream({
+# for q in graph.stream({
+#     "messages": [
+#         HumanMessage(role="user", content=query)
+#     ],
+#     "repo_name": "fibonacci_series",
+#     "file_path": "./README.md",
+#     "file_content": "This is a fibonacci series repo.",
+#     "commit_message": "Initial commit",
+#     "branch_name": "main",
+#     "private": True,
+#     "organization_name": None,
+#     "description": "This is a fibonacci series repo.",
+#     "extra_info": "This is a fibonacci series repo.",
+#     "success_messages": None,
+# }):
+#     print(f"----------STREAM------------\n")
+
+# update={"messages": state['messages'] + [AIMessage(content=result['messages'][-1].content)]},
+
+builder2 = StateGraph(SharedState)
+builder2.add_node("create_commit", create_commit_agent)
+builder2.add_node("create_repo", create_repo_agent)
+builder2.add_node("generate_code", generate_code_agent)
+builder2.add_edge(START, "create_repo")
+graph2 = builder2.compile()
+query2 = """
+    Create a repo in the named factorial_number. 
+    Generate a code for factorial number in python.
+    Create a commit with the file in a repository for the generated code in 
+    main branch with file_name as main.py, file_content as the generated code, 
+    commit message as 'Factorial Number', file_path = "./main.py" and the 
+    repo should be private with no organization.
+    """
+
+for q in graph2.stream({
     "messages": [
-        HumanMessage(role="user", content=query)
+        HumanMessage(role="user", content=query2)
     ],
-    "repo_name": "fibonacci_series",
-    "file_path": "./README.md",
-    "file_content": "This is a fibonacci series repo.",
-    "commit_message": "Initial commit",
-    "branch_name": "main",
-    "private": True,
-    "organization_name": None,
-    "description": "This is a fibonacci series repo.",
-    "extra_info": "This is a fibonacci series repo.",
-    "success_messages": None,
+    # "repo_name": "fibonacci_series",
+    # "file_path": "./README.md",
+    # "file_content": "This is a fibonacci series repo.",
+    # "commit_message": "Initial commit",
+    # "branch_name": "main",
+    # "private": True,
+    # "organization_name": None,
+    # "description": "This is a fibonacci series repo.",
+    # "extra_info": "This is a fibonacci series repo.",
+    # "success_messages": None,
 }):
     print(f"----------STREAM------------\n")
 
