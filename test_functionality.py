@@ -6,6 +6,7 @@ from typing import Optional, List, TypedDict
 
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import HumanMessage, ToolMessage, AIMessage
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from github import Github, Auth
 from typing import Annotated
@@ -145,7 +146,7 @@ def create_commit(commit_data: CreateCommitSchema):
     print(f"---------COMMIT DATA---------------\n{commit_data} ")
     try:
         # pass
-        repo_name = commit_data.repo_name
+        repo_name = f"kevit-hetvee-shah/{commit_data.repo_name}"
         commit_message = commit_data.commit_message
         branch_name = commit_data.branch_name
         file_content = commit_data.file_content
@@ -272,6 +273,7 @@ You are an agent responsible for creating a commit in the repository.
 
 # NOTE:
 - Dont ask any questions to the user. Just create the commit with the given instructions.
+- If you cant fulfil the task, just return the response as it is.
 - Just use tools and complete the task that can be completed by you and return the response. Other tools will do the rest of the work.
 """
 
@@ -295,7 +297,7 @@ You are an agent responsible for creating a repository in the GitHub.
 
 generate_code_prompt = """## GenerateCodeAgent Instructions
 
-You are an agent responsible for generating the code. You will be given a prompt. For that prompt, you will generate the code. There should be no errors in the code.
+You are an agent responsible for generating the code. 
 
 You must return following data:
 - file_name: Name of the file. 
@@ -351,8 +353,8 @@ def create_commit_agent(state: SharedState):
         retry_call = result['messages'][-1].tool_calls and not result['messages'][-1].content
     return Command(
         update={"messages": result['messages']},
-        goto="generate_code",
-        # goto=END,
+        # goto="generate_code",
+        goto=END,
     )
 
 
@@ -394,19 +396,22 @@ builder.add_node("create_commit", create_commit_agent)
 builder.add_node("generate_code", generate_code_agent)
 
 builder.add_edge(START, "create_repo")
+builder.add_edge("create_commit", END)
 
 graph = builder.compile()
 query = """
-    Create a repo with name fibonacci_series. 
-    The repo should contain a README.md file with the content 
-    This is a fibonacci series repo.' and the
-     file should be created in the main branch. 
-     The repo should be public with no organization."""
+    Create a repo in the named factorial_number. 
+    Generate a code for factorial number in python.
+    Create a commit with the file in a repository for the generated code in 
+    main branch with file_name as main.py, file_content as the generated code, 
+    commit message as 'Factorial Number', file_path = "./main.py" and the 
+    repo should be private with no organization.
+    """
 for q in graph.stream({
     "messages": [
         HumanMessage(role="user", content=query)
     ],
-}):
+}, config=RunnableConfig(recursion_limit=6)):
     print(f"----------STREAM------------\n")
 
 # update={"messages": state['messages'] + [AIMessage(content=result['messages'][-1].content)]},

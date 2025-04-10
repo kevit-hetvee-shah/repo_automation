@@ -1,5 +1,5 @@
 import json
-
+import time
 from github import UnknownObjectException
 import os
 from typing import Optional, List, TypedDict, Literal
@@ -16,8 +16,21 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.prebuilt import create_react_agent
 from langgraph.types import Command
 from pydantic import BaseModel
+import openpyxl
 
 load_dotenv()
+
+members = ["create_repo", "create_readme_file", "create_commit", "generate_code"]
+
+options = members + ["FINISH"]
+
+
+# class Router(TypedDict):
+#     next: Literal[*options]
+
+
+class Router(TypedDict):
+    next: Literal[*options]
 
 
 class DebugCallbackHandler(BaseCallbackHandler):
@@ -27,12 +40,15 @@ class DebugCallbackHandler(BaseCallbackHandler):
         print(f"RESPONSE: {response}")
         print("******************************************************")
 
+
 llm = ChatGoogleGenerativeAI(
-    model="gemini-2.0-flash-lite",
-    temperature=0,
-    max_tokens=None,
+    # model="gemini-1.5-flash",
+    # model="gemini-2.0-flash-lite",
+    model="gemini-2.0-flash",
+    temperature=0.7,
+    max_tokens=2048,
     timeout=None,
-    max_retries=2,
+    max_retries=5,
     google_api_key=os.environ.get('GOOGLE_API_KEY'),
     # callbacks=[DebugCallbackHandler()],
     verbose=True,
@@ -40,13 +56,15 @@ llm = ChatGoogleGenerativeAI(
 )
 
 llm2 = ChatGoogleGenerativeAI(
-    model="gemini-1.5-pro",
-    temperature=0,
-    max_tokens=None,
+    model="gemini-1.5-flash",
+    # model="gemini-2.0-flash-lite",
+    # model="gemini-2.0-flash",
+    temperature=0.7,
+    max_tokens=2048,
     timeout=None,
-    max_retries=2,
+    max_retries=5,
     google_api_key=os.environ.get('GOOGLE_API_KEY'),
-    # callbacks=[DebugCallbackHandler()],
+    callbacks=[DebugCallbackHandler()],
     verbose=True,
     # other params...
 )
@@ -145,7 +163,7 @@ def create_commit(commit_data: CreateCommitSchema):
     print(f"---------COMMIT DATA---------------\n{commit_data} ")
     try:
         # pass
-        repo_name = f"kevit-hetvee-shah/{commit_data.repo_name}"
+        repo_name = commit_data.repo_name
         commit_message = commit_data.commit_message
         branch_name = commit_data.branch_name
         file_content = commit_data.file_content
@@ -218,6 +236,7 @@ def create_github_repo(repo_data: RepoCreationSchema):
             "success_messages": f"Successfully created the {repo.full_name} repository in github.",
             "repo_name": repo.full_name,
         }
+
     except Exception as e:
         print(f"Error in creating repository: {e}")
         breakpoint()
@@ -226,22 +245,15 @@ def create_github_repo(repo_data: RepoCreationSchema):
             "repo_name": None,
         }
 
-members = ["create_repo", "create_readme_file", "create_commit", "generate_code"]
-
-options = members + ["FINISH"]
-
-class Router(TypedDict):
-    next: Literal[*options]
 
 readme_agent_prompt = """# CreateReadmeContentAgent Instructions
 
-You are an agent responsible for creating the README file content for the given repository.
+You are an agent responsible for creating the README file content with given data.
 Your responses should only address the creation of the content for README file. 
 Do not include data from any external context. Operate as a standalone assistant focused solely on this task.
 
 # Primary Instructions
 1. You must use the create_readme_file tool to create the content of the README file.
-2. Make sure the content is in markdown format.
 
 ## field names:
 - repo_name: name of the repository and its required.
@@ -249,25 +261,22 @@ Do not include data from any external context. Operate as a standalone assistant
 
 # NOTE:
 - Dont ask any questions to the user. Just create the content of the README file with the given instructions.
-- Just use tools and complete the task that can be completed by you and return the response. Other tools will do the rest of the work.
+- Just use tools and complete the task that can be completed by you and return the response. 
+- If your job is done, prefix your response with "FINAL ANSWER" so the team knows to stop.
 
-# Example Output:
-Make sure the JSON object is correctly formatted and contains no placeholder values (e.g., "unknown").
-
-{
-    "repo_name": "abc",
-    "file_path": "./file",
-    "file_content": "This is the readme file content",
-}
+# IMPORTANT
+- If your job is done, always prefix your response with "FINAL ANSWER" i.e add "FINAL ANSWER" to the beginning of the response.
 """
 
 create_commit_prompt = """# CreateCommitAgent Instructions
 
-You are an agent responsible for creating a commit in the repository.
+You are an agent responsible for creating a commit with the given data in the repository.
 
 # Primary Instructions
 1. You must use the create_commit tool to create the commit.
-
+2. Your role is to create a commit with the given data in the repository.
+3. For creating a commit, you will get the values of following fields. Using these values, you will create a commit in the repository.
+4. The repo_name, file_path, file_content, commit_message, branch_name fields will be required to create a commit and that will always be provided to you.
 
 ## field names:
 - repo_name: full name of the repository to create commit in. 
@@ -278,8 +287,13 @@ You are an agent responsible for creating a commit in the repository.
 
 # NOTE:
 - Dont ask any questions to the user. Just create the commit with the given instructions.
-- If you cant fulfil the task, just return the response as it is.
-- Just use tools and complete the task that can be completed by you and return the response. Other tools will do the rest of the work.
+- Just use the given tools and complete the task that can be completed by you and return the response.
+- If your job is done, prefix your response with "FINAL ANSWER" so the team knows to stop.
+- If you are unable to create a commit, you should return "Error in creating commit: <error message>".
+
+# IMPORTANT
+- If your job is done, always prefix your response with "FINAL ANSWER" i.e add "FINAL ANSWER" to the beginning of the response.
+
 """
 
 create_repo_prompt = """# CreateRepoAgent Instructions
@@ -298,18 +312,15 @@ You are an agent responsible for creating a repository in the GitHub.
 # NOTE:
 - You should not ask any questions to the user. Just simple create the repository with the given instructions.
 - Just use tools and complete the task that can be completed by you and return the response. Other tools will do the rest of the work.
+- If your job is done, prefix your response with "FINAL ANSWER" so the team knows to stop.
+
+# IMPORTANT
+- If your job is done, always prefix your response with "FINAL ANSWER" i.e add "FINAL ANSWER" to the beginning of the response.
 """
 
 generate_code_prompt = """## GenerateCodeAgent Instructions
 
 You are an agent responsible for generating the code. 
-
-You must return following data:
-- file_name: Name of the file. 
-- file_path: Path of the file. Path will always be "./file_name". 
-- file_content: The content generated.
-- branch_name: The name of the branch where the file will be created.
-- commit_message: The commit message for the commit. 
 
 # Primary Instructions
 1. You must generate code in python language only.
@@ -317,12 +328,16 @@ You must return following data:
 3. The code must be well formatted.
 4. The code must be well commented.
 5. The code must contain at least 1 example. 
+6 If your job is done, prefix your response with "FINAL ANSWER" so the team knows to stop.
 
 ## field names:
 - prompt: The prompt for which the code will be generated.
 
 # NOTE:
-- You must return the file_name, file_path, file_content, branch_name and commit_message in the response as it will be used by create_commit_agent to create commit of generated files.
+- If your job is done, prefix your response with "FINAL ANSWER" so the team knows to stop.
+
+# IMPORTANT
+- If your job is done, always prefix your response with "FINAL ANSWER" i.e add "FINAL ANSWER" to the beginning of the response.
 """
 
 supervisor_prompt = f"""# Supervisor Instructions
@@ -341,39 +356,34 @@ supervisor_prompt = f"""# Supervisor Instructions
 
 # NOTE:
 - You must return the agent name in the response as it will be used by the agent to complete the task.
-When you are done, respond with FINISH.
+- If the agent response contains "FINAL ANSWER", then it means that the task is complete.
+- When all tasks asked by user are complete, include "FINISH" as the final step.
+
+# IMPORTANT
+- If the agent's response contains "FINAL ANSWER" at beginning, middle or end, then it means that the agent task is complete. If any of the other agent can satisfy the user's query, call other agent else END the conversation.
+- Analyze the response from agent including AIMessage and ToolMessage and decide what step to take next. 1. Call Agent or 2. End the conversation.
+- If there's a need to call multiple agents, call them in order and define the sequence of agents to call.
 """
+
 
 def readme_agent(state: SharedState) -> Command[Literal["supervisor"]]:
     agent = create_react_agent(llm, tools=[create_readme_file], prompt=readme_agent_prompt)
     print(f"---------- README AGENT STATE------------: \n{state}")
     result = agent.invoke(state)
     print(f"----------RESULT------------: \n{result}")
-    tool_messages = [i for i in result['messages'] if isinstance(i, ToolMessage)][-1]
-    data = json.loads(tool_messages.content)
-    print(f"----------DATA------------: \n{data}")
+    time.sleep(10)
     return Command(
-        update={
-            "success_messages": data.get('success_messages'),
-            "file_content": data.get('file_content'),
-            "file_path": data.get('file_path'),
-            "commit_message": data.get('commit_message'),
-            "file_name": data.get('file_name'),
-            "messages": result.get('messages'),
-        },
+        update={"messages": result['messages']},
         goto="supervisor",
     )
 
 
 def create_commit_agent(state: SharedState) -> Command[Literal["supervisor"]]:
-    agent = create_react_agent(llm, tools=[create_commit], prompt=create_commit_prompt)
+    agent = create_react_agent(llm2, tools=[create_commit], prompt=create_commit_prompt)
     print(f"---------- COMMIT AGENT STATE------------: \n{state}")
     result = agent.invoke(state)
     print(f"----------RESULT------------: \n{result}")
-    retry_call = result['messages'][-1].tool_calls and not result['messages'][-1].content
-    while not retry_call:
-        result = agent.invoke(state)
-        retry_call = result['messages'][-1].tool_calls and not result['messages'][-1].content
+    time.sleep(10)
     return Command(
         update={"messages": result['messages']},
         goto="supervisor",
@@ -385,6 +395,7 @@ def create_repo_agent(state: SharedState) -> Command[Literal["supervisor"]]:
     print(f"----------REPO AGENT STATE------------: \n{state}")
     result = agent.invoke(state)
     print(f"----------RESULT------------: \n{result}")
+    time.sleep(10)
     tool_messages = [i for i in result['messages'] if isinstance(i, ToolMessage)][-1]
     data = json.loads(tool_messages.content)
     print(f"----------DATA------------: \n{data}")
@@ -403,18 +414,34 @@ def generate_code_agent(state: SharedState) -> Command[Literal["supervisor"]]:
     print(f"----------GENERATE CODE STATE------------: \n{state}")
     result = agent.invoke(state)
     print(f"----------RESULT------------: \n{result}")
+    time.sleep(10)
     return Command(
         update={"messages": result['messages']},
         goto="supervisor",
     )
 
-def supervisor_agent(state: SharedState) -> Command[Literal["create_repo", "create_readme_file", "create_commit", "generate_code", "__end__"]]:
+
+# def excel_file_operations(state: SharedState) -> Command[Literal["supervisor"]]:
+#     agent = create_react_agent(llm, tools=[], prompt=excel_file_operations_prompt)
+#     print(f"----------GENERATE CODE STATE------------: \n{state}")
+#     result = agent.invoke(state)
+#     print(f"----------RESULT------------: \n{result}")
+#     time.sleep(10)
+#     return Command(
+#         update={"messages": result['messages']},
+#         goto="supervisor",
+#     )
+
+
+def supervisor_agent(state: SharedState) -> Command[
+    Literal["create_repo", "create_readme_file", "create_commit", "generate_code", "__end__"]]:
     messages = [{"role": "system", "content": supervisor_prompt}] + state["messages"]
     response = llm.with_structured_output(Router).invoke(messages)
     goto = response['next']
     if goto == "FINISH":
         goto = END
     print(goto, "GOTO")
+    time.sleep(10)
     return Command(goto=goto, update={"next": goto})
 
 
@@ -433,5 +460,5 @@ for q in graph.stream({
     "messages": [
         HumanMessage(role="user", content=query)
     ],
-}, config=RunnableConfig(recursion_limit=6)):
-    print(f"----------STREAM------------\n")
+}, config=RunnableConfig(recursion_limit=16)):
+    print(f"----------STREAM------------\n\n\n\n")
