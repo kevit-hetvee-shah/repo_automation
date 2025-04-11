@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 class CreateCommitSchema(BaseModel):
     repo_name: str
+    # organization_name: str
     commit_message: str
     branch_name: str
     file_content: str
@@ -20,14 +21,24 @@ def create_commit(commit_data: CreateCommitSchema):
     """
     print(f"---------COMMIT DATA---------------\n{commit_data} ")
     try:
-        # pass
-        repo_name = f"kevit-hetvee-shah/{commit_data.repo_name}"
+
         commit_message = commit_data.commit_message
         branch_name = commit_data.branch_name
         file_content = commit_data.file_content
+        repo_name = commit_data.repo_name
         file_path = commit_data.file_path
         auth = Auth.Token(os.environ.get("GITHUB_ACCESS_TOKEN"))
         github_obj = Github(auth=auth)
+
+        # if "/" in commit_data.repo_name:
+        #     repo_name = commit_data.repo_name
+        # else:
+        #     if commit_data.organization_name:
+        #         repo_name = f"{commit_data.organization_name}/{commit_data.repo_name}"
+        #     else:
+        #         user = github_obj.get_user()
+        #         repo_name = f"{user.login}/{commit_data.repo_name}"
+
         repo = github_obj.get_repo(repo_name)
         commit_obj = repo.create_file(path=file_path, content=file_content, message=commit_message, branch=branch_name)
         print(

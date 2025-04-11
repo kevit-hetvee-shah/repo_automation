@@ -1,5 +1,4 @@
 import json
-import re
 import time
 from github import UnknownObjectException
 import os
@@ -26,6 +25,10 @@ members = ["create_repo", "create_readme_file", "create_commit", "generate_code"
 options = members + ["FINISH"]
 
 
+# class Router(TypedDict):
+#     next: Literal[*options]
+
+
 class Router(TypedDict):
     next: Literal[*options]
 
@@ -33,11 +36,9 @@ class Router(TypedDict):
 class DebugCallbackHandler(BaseCallbackHandler):
 
     def on_llm_end(self, response, **kwargs):
-        print(
-            "--------------------------------------------------------------------------------------Response from LLM---------------------------------------------------------------------------------------------------")
+        print("-----------------Response from LLM:-----------------")
         print(f"RESPONSE: {response}")
-        print(
-            "***********************************************************************************************************************************************************************************************************")
+        print("******************************************************")
 
 
 llm = ChatGoogleGenerativeAI(
@@ -69,33 +70,53 @@ llm2 = ChatGoogleGenerativeAI(
 )
 
 
-class ToolData(BaseModel):
+class SharedState(TypedDict):
     repo_name: Annotated[str, "Name of the repository."] = None
-    file_path: Annotated[str, "Path of the file"] = None
-    file_content: Annotated[str, "Content of the file."] = None
-    commit_message: Annotated[Optional[str], "Message of the commit"] = None
-    branch_name: Annotated[Optional[str], "Name of the branch. Default is None"] = "main"
+    extra_info: Annotated[str, "Additional information to be included in the README file."] = None
+    file_path: Annotated[str, "Path of the file to be committed"] = None
+    file_content: Annotated[str, "Content of the file to be committed"] = None
+    commit_message: Annotated[Optional[str], "Message of the commit. Default is None"] = None
+    branch_name: Annotated[Optional[str], "Name of the branch. Default is None"] = None
     description: Annotated[Optional[str], "Description of the repository. Default is None"] = None
     organization_name: Annotated[
         Optional[str], ("Name of the organization of the github in which repository needs to be created."
                         "Default is None")] = None
     private: Annotated[bool, "Whether the repository should be private or not. Default is True"] = True
     success_messages: Annotated[str, "Success messages from the tools."] = None
-
-
-class SharedState(TypedDict):
-    tool_data: ToolData
     messages: List = None
 
+
+class CreateReadmeFileSchema(BaseModel):
+    repo_name: Annotated[str, "Full Name of the repository."] = None
+    extra_info: Annotated[str, "Additional information to be included in the README file."] = None
+
+
+class CreateCommitSchema(BaseModel):
+    repo_name: Annotated[str, "Full Name of the repository"]
+    file_path: Annotated[str, "Path of the file to be committed"]
+    file_content: Annotated[str, "Content of the file to be committed"]
+    commit_message: Annotated[Optional[str], "Message of the commit. Default is None"] = None
+    branch_name: Annotated[Optional[str], "Name of the branch. Default is None"] = None
+
+
+class RepoCreationSchema(BaseModel):
+    repo_name: Annotated[str, "Name of the repository"]
+    description: Annotated[Optional[str], "Description of the repository. Default is None"] = None
+    organization_name: Annotated[
+        Optional[str], ("Name of the organization of the github in which repository needs to be created."
+                        "Default is None")] = None
+    private: Annotated[bool, "Whether the repository should be private or not. Default is True"] = True
+
+
 @tool
-def create_readme_file(tool_data: ToolData):
+def create_readme_file(readme_data: CreateReadmeFileSchema):
     """
     Tool to create the content of README file.
     """
-    print(
-        f"----------------------------------------------------------------------------------------------------README DATA---------------------------------------------------------------------------------\n{tool_data} ")
+    print(f"-----------README DATA-----------\n{readme_data} ")
     try:
-        repo_name = tool_data.repo_name
+        repo_name = readme_data.repo_name
+        extra_info = readme_data.extra_info
         content = f"""
         # {repo_name}\nThis is the README file for the {repo_name} repository.
 
@@ -111,13 +132,16 @@ def create_readme_file(tool_data: ToolData):
             python3 main.py\n
             ```
             """
+        if extra_info:
+            content += f"\n##Details:\n{extra_info}\n"
         print(
-            f"-------------\nsuccess_messages: Successfully created the README file for the {repo_name} repository. \n with readme file content \n repo_name: {repo_name}\n---------")
+            f"-------------\nsuccess_messages: Successfully created the README file for the {repo_name} repository. \n file_content: {content}\n repo_name: {repo_name}\n---------")
         return {
             "success_messages": f"Successfully created the README file for the {repo_name} repository.",
             "file_content": content,
             "file_path": "./README.md",
             "commit_message": "Initial commit",
+            "file_name": "README.md",
         }
     except Exception as e:
         print(f"Error in creating README file: {e}")
@@ -127,22 +151,23 @@ def create_readme_file(tool_data: ToolData):
             "file_content": None,
             "file_path": "./README.md",
             "commit_message": "Initial commit",
+            "file_name": "README.md",
         }
 
 
 @tool
-def create_commit(tool_data: ToolData):
+def create_commit(commit_data: CreateCommitSchema):
     """
     Tool to create a commit in a GitHub repository with given file path and content.
     """
-    print(
-        f"--------------------------------------------------------------------------------------------COMMIT DATA------------------------------------------------------------------------------------------\n{tool_data} ")
+    print(f"---------COMMIT DATA---------------\n{commit_data} ")
     try:
-        repo_name = tool_data.repo_name
-        commit_message = tool_data.commit_message
-        branch_name = tool_data.branch_name
-        file_content = tool_data.file_content
-        file_path = tool_data.file_path
+        # pass
+        repo_name = commit_data.repo_name
+        commit_message = commit_data.commit_message
+        branch_name = commit_data.branch_name
+        file_content = commit_data.file_content
+        file_path = commit_data.file_path
         auth = Auth.Token(os.environ.get("GITHUB_ACCESS_TOKEN"))
         github_obj = Github(auth=auth)
         repo = github_obj.get_repo(repo_name)
@@ -151,29 +176,33 @@ def create_commit(tool_data: ToolData):
             f"-------\ncommit_sha: f{commit_obj.get('commit').sha} \nfile_path: {file_path}\n file_content: {file_content}\n success_messages: Successfully created commit in {repo_name} at {branch_name} with file {file_path}\n----------------")
 
         return {
-            "success_messages": f"Successfully created commit with sha {commit_obj.get('commit').sha} in {repo_name} at {branch_name} with file {file_path}"
+            "commit_sha": commit_obj.get('commit').sha,
+            "file_path": file_path,
+            "file_content": file_content,
+            "success_messages": f"Successfully created commit in {repo_name} at {branch_name} with file {file_path}"
         }
     except Exception as e:
         print(f"Error in creating commit: {e}")
         breakpoint()
         return {
             "commit_sha": None,
+            "file_path": None,
+            "file_content": None,
             "success_messages": f"Error in creating commit: {e}"
         }
 
 
 @tool
-def create_github_repo(tool_data: ToolData):
+def create_github_repo(repo_data: RepoCreationSchema):
     """
     Tool to create a GitHub repository using given data.
     """
-    print(
-        f"---------------------------------------------------------------------------------------REPO DATA----------------------------------------------------------------------------------------------\n{tool_data} ")
+    print(f"---------------REPO DATA--------------\n{repo_data} ")
     try:
-        repo_name = tool_data.repo_name
-        organization_name = tool_data.organization_name
-        description = tool_data.description
-        private = tool_data.private
+        repo_name = repo_data.repo_name
+        organization_name = repo_data.organization_name
+        description = repo_data.description
+        private = repo_data.private
         auth = Auth.Token(os.environ.get("GITHUB_ACCESS_TOKEN"))
         github_obj = Github(auth=auth)
         if organization_name:
@@ -228,6 +257,7 @@ Do not include data from any external context. Operate as a standalone assistant
 
 ## field names:
 - repo_name: name of the repository and its required.
+- extra_info: any extra information that is required to be included in the README file.
 
 # NOTE:
 - Dont ask any questions to the user. Just create the content of the README file with the given instructions.
@@ -245,11 +275,12 @@ You are an agent responsible for creating a commit with the given data in the re
 # Primary Instructions
 1. You must use the create_commit tool to create the commit.
 2. Your role is to create a commit with the given data in the repository.
-3. The repo_name, file_path, file_content, commit_message, branch_name fields will be required to create a commit. All these values will be provided to you. Use those provided values to create a commit.
+3. For creating a commit, you will get the values of following fields. Using these values, you will create a commit in the repository.
+4. The repo_name, file_path, file_content, commit_message, branch_name fields will be required to create a commit and that will always be provided to you.
 
 ## field names:
 - repo_name: full name of the repository to create commit in. 
-- file_path: path where the file will be created.
+- file_path: path where the file will be created. It will generally be "./file_name".
 - file_content: content of the file to be committed.
 - commit_message: message for the commit.
 - branch_name: name of the branch where the commit will be made.
@@ -298,15 +329,9 @@ You are an agent responsible for generating the code.
 4. The code must be well commented.
 5. The code must contain at least 1 example. 
 6 If your job is done, prefix your response with "FINAL ANSWER" so the team knows to stop.
-7. You must return the return fields in the JSON format.
 
 ## field names:
 - prompt: The prompt for which the code will be generated.
-
-## return fields:
-- file_name: Name of the file based on user's query
-- file_content: The actual python code
-- commit_message: The message explaining using query
 
 # NOTE:
 - If your job is done, prefix your response with "FINAL ANSWER" so the team knows to stop.
@@ -322,17 +347,15 @@ supervisor_prompt = f"""# Supervisor Instructions
 - You are an agent responsible for supervising the other agents.
 - Your role is understand the user input and decide which agent to use.
 - You have these agents with you {members}
-- Each agent of highly capable of doing a specific task
 
 # Agents Description:
-- create_repo: This agent is responsible for creating a repository in the GitHub.
-- create_readme_file: This agent is responsible for creating the README file content for the given repository.
-- create_commit: This agent is responsible for creating a commit in the repository. You should use this agent when anything needs to be commited to repository.
-- generate_code: This agent is responsible for generating the code in python language.
+- create_repo_agent: This agent is responsible for creating a repository in the GitHub.
+- create_readme_file_agent: This agent is responsible for creating the README file content for the given repository.
+- create_commit_agent: This agent is responsible for creating a commit in the repository.
+- generate_code_agent: This agent is responsible for generating the code in python language.
 
 # NOTE:
 - You must return the agent name in the response as it will be used by the agent to complete the task.
-- Use create_commit to create commit
 - If the agent response contains "FINAL ANSWER", then it means that the task is complete.
 - When all tasks asked by user are complete, include "FINISH" as the final step.
 
@@ -345,138 +368,69 @@ supervisor_prompt = f"""# Supervisor Instructions
 
 def readme_agent(state: SharedState) -> Command[Literal["supervisor"]]:
     agent = create_react_agent(llm, tools=[create_readme_file], prompt=readme_agent_prompt)
-    print(
-        f"---------------------------------------------------------------------------------------------------------- README AGENT STATE------------------------------------------------------------------------: \n{state}")
+    print(f"---------- README AGENT STATE------------: \n{state}")
     result = agent.invoke(state)
-    print(
-        f"---------------------------------------------------------------------------------------------------------RESULT-------------------------------------------------------------------------------------: \n{result}")
-    tool_messages = [i for i in result['messages'] if isinstance(i, ToolMessage)]
-    if tool_messages:
-        tool_message = tool_messages[-1]
-        data = json.loads(tool_message.content)
-        updated_state = {
-            "success_messages": data.get('success_messages'),
-            "messages": result.get('messages'),
-            "file_name": data.get('file_name'),
-            "file_content": data.get('file_content'),
-            "file_path": data.get('file_path'),
-            "commit_message": data.get('commit_message'),
-        }
-        return Command(
-            update={
-                "tool_data": updated_state,
-                "messages": result.get('messages'),
-            },
-            goto="supervisor",
-        )
-    else:
-        return Command(
-            update={
-                "messages": state['messages']},
-            goto="supervisor"
-        )
+    print(f"----------RESULT------------: \n{result}")
+    time.sleep(10)
+    return Command(
+        update={"messages": result['messages']},
+        goto="supervisor",
+    )
 
 
 def create_commit_agent(state: SharedState) -> Command[Literal["supervisor"]]:
-    agent = create_react_agent(llm, tools=[create_commit], prompt=create_commit_prompt)
-    print(
-        f"------------------------------------------------------------------------------------------- COMMIT AGENT STATE-------------------------------------------------------------------------------------: \n{state}")
+    agent = create_react_agent(llm2, tools=[create_commit], prompt=create_commit_prompt)
+    print(f"---------- COMMIT AGENT STATE------------: \n{state}")
     result = agent.invoke(state)
-    print(
-        f"------------------------------------------------------------------------------------------------RESULT---------------------------------------------------------------------------------------: \n{result}")
-    tool_messages = [i for i in result['messages'] if isinstance(i, ToolMessage)]
-    if tool_messages:
-        tool_message = tool_messages[-1]
-        try:
-            data = json.loads(tool_message.content)
-            updated_state = {
-                "success_messages": data.get('success_messages'),
-            }
-            return Command(
-                update={
-                    "tool_data": updated_state,
-                    "messages": result.get('messages'),
-                },
-                goto="supervisor",
-            )
-        except Exception as e:
-            print(f"Exception: {e}")
-            breakpoint()
-            return Command(
-                update={
-                    "messages": result.get('messages'),
-                },
-                goto="supervisor",
-            )
-    else:
-        return Command(
-            update={
-                "messages": state['messages']},
-            goto="supervisor"
-        )
+    print(f"----------RESULT------------: \n{result}")
+    time.sleep(10)
+    return Command(
+        update={"messages": result['messages']},
+        goto="supervisor",
+    )
 
 
 def create_repo_agent(state: SharedState) -> Command[Literal["supervisor"]]:
     agent = create_react_agent(llm, tools=[create_github_repo], prompt=create_repo_prompt)
-    print(
-        f"---------------------------------------------------------------------------------------------REPO AGENT STATE-------------------------------------------------------------------------------------: \n{state}")
+    print(f"----------REPO AGENT STATE------------: \n{state}")
     result = agent.invoke(state)
-    print(
-        f"-----------------------------------------------------------------------------------------------RESULT--------------------------------------------------------------------------------------------: \n{result}")
-    tool_messages = [i for i in result['messages'] if isinstance(i, ToolMessage)]
-    if tool_messages:
-        tool_message = tool_messages[-1]
-        data = json.loads(tool_message.content)
-        updated_state = {
-            "success_messages": data.get('success_messages'),
-            "repo_name": data.get('repo_name'),
-            "messages": result.get('messages'),
-        }
-        return Command(
-            update={
-                "tool_data": updated_state,
-                "messages": result.get('messages'),
-            },
-            goto="supervisor",
-        )
-    else:
-        return Command(
-            update={
-                "messages": state['messages']},
-            goto="supervisor"
-        )
-
-
-def generate_code_agent(state: SharedState) -> Command[Literal["supervisor"]]:
-    agent = create_react_agent(llm, tools=[], prompt=generate_code_prompt)
-    print(
-        f"-----------------------------------------------------------------------------------GENERATE CODE STATE------------------------------------------------------------------------------------------: \n{state}")
-    result = agent.invoke(state)
-    print(
-        f"--------------------------------------------------------------------------------------RESULT---------------------------------------------------------------------------------------------------: \n{result}")
-    # file_content = [i.content for i in result['messages'] if type(i) == AIMessage and i.content != ""][0]
-    # if "json" in file_content:
-        # cleaned = re.sub(r"^```json\n|```$", "", file_content.strip(), flags=re.MULTILINE).replace("FINAL ANSWER", "")
-        # breakpoint()
-        # json_data = json.loads(cleaned)
-
-        # updated_state = {
-        #     "file_content": json_data.get('file_content'),
-        #     "file_path": f"./{json_data.get('file_name')}",
-        #     "commit_message": json_data.get('commit_message')
-        # }
-    updated_state = {
-        "file_content": "CODE",
-        "file_path": "./code.py",
-        "commit_message": "test_commit"
-    }
+    print(f"----------RESULT------------: \n{result}")
+    time.sleep(10)
+    tool_messages = [i for i in result['messages'] if isinstance(i, ToolMessage)][-1]
+    data = json.loads(tool_messages.content)
+    print(f"----------DATA------------: \n{data}")
     return Command(
         update={
-            "tool_data": updated_state,
+            "success_messages": data.get('success_messages'),
+            "repo_name": data.get('repo_name'),
             "messages": result.get('messages'),
         },
         goto="supervisor",
     )
+
+
+def generate_code_agent(state: SharedState) -> Command[Literal["supervisor"]]:
+    agent = create_react_agent(llm, tools=[], prompt=generate_code_prompt)
+    print(f"----------GENERATE CODE STATE------------: \n{state}")
+    result = agent.invoke(state)
+    print(f"----------RESULT------------: \n{result}")
+    time.sleep(10)
+    return Command(
+        update={"messages": result['messages']},
+        goto="supervisor",
+    )
+
+
+# def excel_file_operations(state: SharedState) -> Command[Literal["supervisor"]]:
+#     agent = create_react_agent(llm, tools=[], prompt=excel_file_operations_prompt)
+#     print(f"----------GENERATE CODE STATE------------: \n{state}")
+#     result = agent.invoke(state)
+#     print(f"----------RESULT------------: \n{result}")
+#     time.sleep(10)
+#     return Command(
+#         update={"messages": result['messages']},
+#         goto="supervisor",
+#     )
 
 
 def supervisor_agent(state: SharedState) -> Command[
@@ -487,6 +441,7 @@ def supervisor_agent(state: SharedState) -> Command[
     if goto == "FINISH":
         goto = END
     print(goto, "GOTO")
+    time.sleep(10)
     return Command(goto=goto, update={"next": goto})
 
 
@@ -505,7 +460,5 @@ for q in graph.stream({
     "messages": [
         HumanMessage(role="user", content=query)
     ],
-    "tool_data": {}
 }, config=RunnableConfig(recursion_limit=16)):
-    print(
-        f"----------------------------------------------------------------------------------------------------------STREAM------------------------------------------------------------------------------------\n\n\n\n{q}")
+    print(f"----------STREAM------------\n\n\n\n")

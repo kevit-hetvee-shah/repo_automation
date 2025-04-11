@@ -1,7 +1,8 @@
+from langchain_core.callbacks import UsageMetadataCallbackHandler
 from langchain_core.messages import HumanMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import StateGraph
-
+# callback = UsageMetadataCallbackHandler()
 
 class Workflow:
     def __init__(self, state, recursion_depth: int = 20, query: str = ""):
@@ -38,7 +39,8 @@ class Workflow:
                 ],
             },
             config=RunnableConfig(recursion_limit=self.recursion_depth)
+
+
         )
         for i in result:
-            print(f"-------STREAMING-----------\n{i}\n\n\n\n\n")
             yield i
