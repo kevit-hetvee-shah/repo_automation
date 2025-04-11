@@ -26,8 +26,14 @@ members = ["create_repo", "create_readme_file", "create_commit", "generate_code"
 options = members + ["FINISH"]
 
 
+class AgentSpec(TypedDict):
+    id: str
+    name: str
+
+
 class Router(TypedDict):
     next: Literal[*options]
+    agent_sequence: Annotated[List[str], "Sequence of the agents/nodes to be executed."]
 
 
 class DebugCallbackHandler(BaseCallbackHandler):
@@ -86,6 +92,7 @@ class ToolData(BaseModel):
 class SharedState(TypedDict):
     tool_data: ToolData
     messages: List = None
+
 
 @tool
 def create_readme_file(tool_data: ToolData):
@@ -322,7 +329,9 @@ supervisor_prompt = f"""# Supervisor Instructions
 - You are an agent responsible for supervising the other agents.
 - Your role is understand the user input and decide which agent to use.
 - You have these agents with you {members}
-- Each agent of highly capable of doing a specific task
+- Each agent of highly capable of doing a specific task.
+- You must use the agent that is best suited for the task.
+- You should first create a sequence of agents in order to complete the task.
 
 # Agents Description:
 - create_repo: This agent is responsible for creating a repository in the GitHub.
@@ -335,11 +344,32 @@ supervisor_prompt = f"""# Supervisor Instructions
 - Use create_commit to create commit
 - If the agent response contains "FINAL ANSWER", then it means that the task is complete.
 - When all tasks asked by user are complete, include "FINISH" as the final step.
+- You should create a sequence of agents in order to complete the task.
+
+# Your Responsibilities:
+        1. Understand User Requests: Given the user's input, identify ALL workers needed to handle it and the proper 
+        sequence they should be executed in.
+        2. Routing Logic: Assign the appropriate workers from the available options [{", ".join(members)}].
+           When all tasks are complete, include "FINISH" as the final step.
+        3. Response Handling:
+           - Structured Output: Ensure all responses are in JSON format with the keys:
+             - `tool_sequence`: An ordered array of worker names to execute in sequence
+             - For each step, include any specific instructions or parameters needed
+        4. Finalization: Once all tools have been executed, add "FINISH" as the final element in the tool_sequence.
+
+#Communication Style:
+        - Keep responses clear, structured, and informative.
+        - For multi-tool sequences, explain the plan for executing tasks in order.
+        - Ensure all questions are concise and easy to understand.
+        - When the conversation is complete, always include "FINISH" as the final step.
 
 # IMPORTANT
 - If the agent's response contains "FINAL ANSWER" at beginning, middle or end, then it means that the agent task is complete. If any of the other agent can satisfy the user's query, call other agent else END the conversation.
 - Analyze the response from agent including AIMessage and ToolMessage and decide what step to take next. 1. Call Agent or 2. End the conversation.
 - If there's a need to call multiple agents, call them in order and define the sequence of agents to call.
+- You should create a sequence of agents in order to complete the task.
+- If a query requires multiple tools, you MUST identify all needed tools and their proper execution 
+        order. Do not simply route to one tool when multiple are needed.
 """
 
 
@@ -456,15 +486,15 @@ def generate_code_agent(state: SharedState) -> Command[Literal["supervisor"]]:
         f"--------------------------------------------------------------------------------------RESULT---------------------------------------------------------------------------------------------------: \n{result}")
     # file_content = [i.content for i in result['messages'] if type(i) == AIMessage and i.content != ""][0]
     # if "json" in file_content:
-        # cleaned = re.sub(r"^```json\n|```$", "", file_content.strip(), flags=re.MULTILINE).replace("FINAL ANSWER", "")
-        # breakpoint()
-        # json_data = json.loads(cleaned)
+    # cleaned = re.sub(r"^```json\n|```$", "", file_content.strip(), flags=re.MULTILINE).replace("FINAL ANSWER", "")
+    # breakpoint()
+    # json_data = json.loads(cleaned)
 
-        # updated_state = {
-        #     "file_content": json_data.get('file_content'),
-        #     "file_path": f"./{json_data.get('file_name')}",
-        #     "commit_message": json_data.get('commit_message')
-        # }
+    # updated_state = {
+    #     "file_content": json_data.get('file_content'),
+    #     "file_path": f"./{json_data.get('file_name')}",
+    #     "commit_message": json_data.get('commit_message')
+    # }
     updated_state = {
         "file_content": "CODE",
         "file_path": "./code.py",
@@ -483,6 +513,7 @@ def supervisor_agent(state: SharedState) -> Command[
     Literal["create_repo", "create_readme_file", "create_commit", "generate_code", "__end__"]]:
     messages = [{"role": "system", "content": supervisor_prompt}] + state["messages"]
     response = llm.with_structured_output(Router).invoke(messages)
+    breakpoint()
     goto = response['next']
     if goto == "FINISH":
         goto = END
