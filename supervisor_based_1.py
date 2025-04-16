@@ -1,11 +1,30 @@
+"""
+Supervisor-based agent.
+
+This script implements a supervisor-based agent system for automating GitHub-related tasks.
+It uses LangChain and other libraries to create a modular, state-driven workflow for managing
+repositories, commits, and other GitHub operations.
+
+Key Features:
+- Modular agents for specific tasks (e.g., creating repositories, commits, README files).
+- Supervisor agent to orchestrate task execution.
+- Integration with LangChain for state management and tool invocation.
+- Streamlit-based UI for user interaction.
+
+
+semantic (facts and knowledge)
+episodic (past experiences)
+procedural (system behaviour)
+"""
+# Import necessary libraries and modules
+
 import json
-import time
 from github import UnknownObjectException
 import os
-from typing import Optional, List, TypedDict, Literal
+from typing import Optional, Literal
 
 from langchain_core.callbacks import BaseCallbackHandler
-from langchain_core.messages import HumanMessage, ToolMessage, AIMessage
+from langchain_core.messages import HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from github import Github, Auth
@@ -14,23 +33,32 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from dotenv import load_dotenv
 from langgraph.graph import StateGraph, START, END, MessagesState
 from langgraph.prebuilt import create_react_agent
-from langgraph.types import Command, interrupt
+from langgraph.types import Command
 from pydantic import BaseModel
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.store.memory import InMemoryStore
+import sqlite3
+from langgraph.checkpoint.sqlite import SqliteSaver
+import streamlit as st
 
-memory = MemorySaver()
+# Streamlit UI header
+st.header("Github Automation")
+
+# Load environment variables from a .env file
 load_dotenv()
 
+# Define the list of available agents and options
 members = ["create_repo", "create_readme_file", "create_commit", "generate_code", "list_repo_branches",
            "general_assistant"]
-
 options = members + ["FINISH"]
 
 
+# Define the Router model for supervisor agent responses
 class Router(BaseModel):
     next: Literal[*options]
 
 
+# Debug callback handler for logging LLM responses
 class DebugCallbackHandler(BaseCallbackHandler):
 
     def on_llm_end(self, response, **kwargs):
@@ -39,8 +67,8 @@ class DebugCallbackHandler(BaseCallbackHandler):
         print("******************************************************")
 
 
+# Initialize two LLM instances with different configurations
 llm = ChatGoogleGenerativeAI(
-    # model="gemini-1.5-flash",
     # model="gemini-2.0-flash-lite",
     model="gemini-2.0-flash",
     temperature=0.7,
@@ -68,6 +96,7 @@ llm2 = ChatGoogleGenerativeAI(
 )
 
 
+# Define the shared state model for the workflow
 class SharedState(MessagesState):
     # for all the tools: success_messages
     success_messages: Annotated[str, "Success messages from the tools."] = None
@@ -92,6 +121,15 @@ def create_readme_file(repo_name: str, extra_info: str) -> str:
     """
     Tool to create the content of README file.
     """
+    return_data = {
+        "file_path": "./README.md",
+        "commit_message": "Initial commit",
+        "file_name": "README.md",
+        "repo_name": repo_name,
+        "extra_info": extra_info,
+        "success_messages": "",
+        "file_content": ""
+    }
     print(f"-----------README DATA-----------\nREPO NAME: {repo_name}, EXTRA INFO: {extra_info}")
     try:
         content = f"""
@@ -113,27 +151,13 @@ def create_readme_file(repo_name: str, extra_info: str) -> str:
             content += f"\n##Details:\n{extra_info}\n"
         print(
             f"-------------\nsuccess_messages: Successfully created the README file for the {repo_name} repository. \n file_content: {content}\n repo_name: {repo_name}\n---------")
-        return {
-            "success_messages": f"Successfully created the README file for the {repo_name} repository.",
-            "file_content": content,
-            "file_path": "./README.md",
-            "commit_message": "Initial commit",
-            "file_name": "README.md",
-            "repo_name": repo_name,
-            "extra_info": extra_info,
-        }
+        return_data["success_messages"] = f"Successfully created the README file for the {repo_name} repository."
+        return_data["file_content"] = content
     except Exception as e:
         print(f"Error in creating README file: {e}")
-        breakpoint()
-        return {
-            "success_messages": f"Error in creating README file: {e}",
-            "file_content": None,
-            "file_path": "./README.md",
-            "commit_message": "Initial commit",
-            "file_name": "README.md",
-            "repo_name": repo_name,
-            "extra_info": extra_info,
-        }
+        return_data["success_messages"] = f"Error in creating README file: {e}"
+        return_data["file_content"] = ""
+    return json.dumps(return_data)
 
 
 @tool
@@ -142,6 +166,13 @@ def create_commit(repo_name: str, file_path: str, file_content: str,
     """
     Tool to create a commit in a GitHub repository with given file path and content.
     """
+    return_data = {
+        "file_content": file_content,
+        "commit_message": commit_message,
+        "branch_name": branch_name,
+        "repo_name": repo_name,
+        "success_messages": ""
+    }
     print(f"---------COMMIT DATA---------------\nREPO NAME: {repo_name}, FILE PATH: {file_path}, "
           f"FILE CONTENT: {file_content}, COMMIT MESSAGE: {commit_message}, BRANCH NAME: {branch_name}")
     try:
@@ -152,25 +183,12 @@ def create_commit(repo_name: str, file_path: str, file_content: str,
         print(
             f"-------\ncommit_sha: f{commit_obj.get('commit').sha} \nfile_path: {file_path}\n file_content: {file_content}\n success_messages: Successfully created commit in {repo_name} at {branch_name} with file {file_path}\n----------------")
 
-        return {
-            "success_messages": f"Successfully created commit in {repo_name} at {branch_name} with file {file_path}",
-            "file_path": file_path,
-            "file_content": file_content,
-            "commit_message": commit_message,
-            "branch_name": branch_name,
-            "repo_name": repo_name,
-        }
+        return_data[
+            'success_messages'] = f"Successfully created commit in {repo_name} at {branch_name} with file {file_path}"
     except Exception as e:
         print(f"Error in creating commit: {e}")
-        breakpoint()
-        return {
-            "success_messages": f"Error in creating commit: {e}",
-            "file_path": file_path,
-            "file_content": file_content,
-            "commit_message": commit_message,
-            "branch_name": branch_name,
-            "repo_name": repo_name,
-        }
+        return_data['success_messages'] = f"Error in creating commit: {e}"
+    return json.dumps(return_data)
 
 
 @tool
@@ -178,6 +196,13 @@ def create_github_repo(repo_name: str, description: str, organization_name: str,
     """
     Tool to create a GitHub repository using given data.
     """
+    return_data = {
+        "repo_name": repo_name,
+        "description": description,
+        "organization_name": organization_name,
+        "private": private,
+        "success_messages": ""
+    }
     print(f"---------------REPO DATA--------------\nREPO NAME  {repo_name}, DESCRIPTION: {description}, "
           f"ORGANIZATION NAME: {organization_name}, PRIVATE: {private}")
     try:
@@ -210,39 +235,35 @@ def create_github_repo(repo_name: str, description: str, organization_name: str,
 
         print(
             f"--------\nMessage: Successfully created the {repo.full_name} repository in github. \nrepo_name: {repo.full_name}\n-------------")
-        return {
-            "success_messages": f"Successfully created the {repo.full_name} repository in github.",
-            "repo_name": repo.full_name,
-            "description": description,
-            "organization_name": organization_name,
-            "private": private,
-        }
-
+        return_data["success_messages"] = f"Successfully created the {repo.full_name} repository in github."
     except Exception as e:
         print(f"Error in creating repository: {e}")
-        breakpoint()
-        return {
-            "success_messages": f"Error in creating repository: {e}",
-            "repo_name": None,
-            "description": description,
-            "organization_name": organization_name,
-            "private": private,
-        }
+        return_data["success_messages"] = f"Error in creating repository: {e}"
+    return json.dumps(return_data)
 
 
 @tool
-def list_repo_branches_tool():
+def list_repo_branches_tool() -> str:
     """
     Tool to list branches of a GitHub repository.
     """
+    return_data = {
+        "branches": [],
+        "success_messages": ""
+    }
     human_response = input("Enter the repository name: ")
     print(f"---------REPO DATA--------------\nREPO NAME: {human_response}")
     auth = Auth.Token(os.environ.get("GITHUB_ACCESS_TOKEN"))
     github_obj = Github(auth=auth)
-    repo = github_obj.get_repo(human_response)
-    branches = [i.name for i in list(repo.get_branches())]
-    print(f"Branches: {branches}")
-    return {"branches": branches, "human_input": human_response}
+    try:
+        repo = github_obj.get_repo(human_response)
+        branches = [i.name for i in list(repo.get_branches())]
+        print(f"Branches: {branches}")
+        return_data['success_messages'] = f"Successfully fetched {len(branches)} the branches of {human_response} repository"
+    except Exception as e:
+        print(f"Error occurred while fetching repo - {e}")
+        return_data['success_messages'] = f"Error occurred while fetching repo - {e}"
+    return json.dumps(return_data)
 
 
 readme_agent_prompt = """# CreateReadmeContentAgent Instructions
@@ -361,7 +382,7 @@ supervisor_prompt = f"""# Supervisor Instructions
 - create_commit: This agent is responsible for creating a commit in the repository.
 - generate_code: This agent is responsible for generating the code in python language.
 - list_repo_branches: This agent is responsible for listing the branches of the given repository.
-- general_assistant: This agent is responsible for general purpose tasks.
+- general_assistant: This agent is responsible for general purpose tasks. it will greet the user and respond to any question.
 
 # NOTE:
 - You must return the agent name in the response as it will be used by the agent to complete the task.
@@ -411,238 +432,126 @@ list_repository_branches_prompt = """
 """
 
 
+def update_state_from_tool_message(result_messages, node_name):
+    updated_state = {}
+    try:
+        tool_messages = [i for i in result_messages['messages'] if isinstance(i, ToolMessage)]
+        if tool_messages:
+            tool_message = tool_messages[-1]
+            try:
+                data = json.loads(tool_message.content)
+                print(f"----------DATA------------: \n{data}")
+                for key, value in data.items():
+                    updated_state[key] = value
+            except Exception as error:
+                print(f"Error while parsing JSON: {error}")
+        else:
+            print(
+                "<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< NO tool call >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
+    except Exception as e:
+        print(f"Error while updating state: {e}")
+    updated_state['messages'] = [HumanMessage(content=result_messages['messages'][-1].content, name=node_name)]
+    return updated_state
+
+
 def readme_agent(state: SharedState) -> Command[Literal["supervisor"]]:
+    """
+    Agent for creating README file content.
+    """
     agent = create_react_agent(llm, tools=[create_readme_file], prompt=readme_agent_prompt)
     print(f"---------- README AGENT STATE------------: \n{state}")
     result = agent.invoke(state)
     print(f"----------RESULT------------: \n{result}")
-    tool_messages = [i for i in result['messages'] if isinstance(i, ToolMessage)]
-    if tool_messages:
-        tool_message = tool_messages[-1]
-        try:
-            data = json.loads(tool_message.content)
-            print(f"----------DATA------------: \n{data}")
-            updated_state = {}
-            for key, value in data.items():
-                updated_state[key] = value
-            updated_state['messages'] = [HumanMessage(content=result['messages'][-1].content, name="generate_code")]
-            return Command(
-                update=updated_state,
-                goto="supervisor",
-            )
-        except Exception as error:
-            print(f"Error while parsing JSON: {error}")
-            breakpoint()
-            updated_state = {}
-            updated_state['messages'] = [HumanMessage(content=result['messages'][-1].content, name="generate_code")]
-            return Command(
-                update=updated_state,
-                goto="supervisor",
-            )
-    else:
-        print(
-            "<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< NO tool call >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
-        return Command(
-            update={"messages": [HumanMessage(content=result['messages'][-1].content, name="generate_code")]},
-            goto="supervisor",
-        )
+    state_after_update = update_state_from_tool_message(result, "create_readme_file")
+    return Command(
+        update=state_after_update,
+        goto="supervisor",
+    )
 
 
 def create_commit_agent(state: SharedState) -> Command[Literal["supervisor"]]:
+    """
+    Agent for creating a commit in a GitHub repository.
+    """
     agent = create_react_agent(llm, tools=[create_commit], prompt=create_commit_prompt)
     print(f"---------- COMMIT AGENT STATE------------: \n{state}")
     result = agent.invoke(state)
     print(f"----------RESULT------------: \n{result}")
-    tool_messages = [i for i in result['messages'] if isinstance(i, ToolMessage)]
-    if tool_messages:
-        tool_message = tool_messages[-1]
-        try:
-            data = json.loads(tool_message.content)
-            print(f"----------DATA------------: \n{data}")
-            updated_state = {}
-            for key, value in data.items():
-                updated_state[key] = value
-            updated_state['messages'] = [HumanMessage(content=result['messages'][-1].content, name="generate_code")]
-            return Command(
-                update=updated_state,
-                goto="supervisor",
-            )
-        except Exception as error:
-            print(f"Error while parsing JSON: {error}")
-            breakpoint()
-            updated_state = {}
-            updated_state['messages'] = [HumanMessage(content=result['messages'][-1].content, name="generate_code")]
-            return Command(
-                update=updated_state,
-                goto="supervisor",
-            )
-    else:
-        print(
-            "<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< NO tool call >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
-        return Command(
-            update={"messages": [HumanMessage(content=result['messages'][-1].content, name="generate_code")]},
-            goto="supervisor",
-        )
+    state_after_update = update_state_from_tool_message(result, "create_commit")
+    return Command(
+        update=state_after_update,
+        goto="supervisor",
+    )
 
 
 def create_repo_agent(state: SharedState) -> Command[Literal["supervisor"]]:
+    """
+    Agent for creating a GitHub repository.
+    """
     agent = create_react_agent(llm, tools=[create_github_repo], prompt=create_repo_prompt)
     print(f"----------REPO AGENT STATE------------: \n{state}")
     result = agent.invoke(state)
     print(f"----------RESULT------------: \n{result}")
-    tool_messages = [i for i in result['messages'] if isinstance(i, ToolMessage)]
-    if tool_messages:
-        tool_message = tool_messages[-1]
-        try:
-            data = json.loads(tool_message.content)
-            print(f"----------DATA------------: \n{data}")
-            updated_state = {}
-            for key, value in data.items():
-                updated_state[key] = value
-            updated_state['messages'] = [HumanMessage(content=result['messages'][-1].content, name="generate_code")]
-            return Command(
-                update=updated_state,
-                goto="supervisor",
-            )
-        except Exception as error:
-            print(f"Error while parsing JSON: {error}")
-            breakpoint()
-            updated_state = {}
-            updated_state['messages'] = [HumanMessage(content=result['messages'][-1].content, name="generate_code")]
-            return Command(
-                update=updated_state,
-                goto="supervisor",
-            )
-    else:
-        print(
-            "<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< NO tool call >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
-        return Command(
-            update={
-                "messages": [HumanMessage(content=result['messages'][-1].content, name="generate_code")]
-            },
-            goto="supervisor",
-        )
+    state_after_update = update_state_from_tool_message(result, "create_repo")
+    return Command(
+        update=state_after_update,
+        goto="supervisor",
+    )
 
 
 def generate_code_agent(state: SharedState) -> Command[Literal["supervisor"]]:
+    """
+    Agent for generating Python code.
+    """
     agent = create_react_agent(llm, tools=[], prompt=generate_code_prompt)
     print(f"----------GENERATE CODE STATE------------: \n{state}")
     result = agent.invoke(state)
     print(f"----------RESULT------------: \n{result}")
-    tool_messages = [i for i in result['messages'] if isinstance(i, ToolMessage)]
-    if tool_messages:
-        tool_message = tool_messages[-1]
-        try:
-            data = json.loads(tool_message.content)
-            print(f"----------DATA------------: \n{data}")
-            updated_state = {}
-            for key, value in data.items():
-                updated_state[key] = value
-            updated_state['messages'] = [HumanMessage(content=result['messages'][-1].content, name="generate_code")]
-            return Command(
-                update=updated_state,
-                goto="supervisor",
-            )
-        except Exception as error:
-            print(f"Error while parsing JSON: {error}")
-            breakpoint()
-            updated_state = {}
-            updated_state['messages'] = [HumanMessage(content=result['messages'][-1].content, name="generate_code")]
-            return Command(
-                update=updated_state,
-                goto="supervisor",
-            )
-    else:
-        print(
-            "<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< NO tool call >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
-        return Command(
-            update={
-                "messages": [HumanMessage(content=result['messages'][-1].content, name="generate_code")],
-            },
-            goto="supervisor",
-        )
+    state_after_update = update_state_from_tool_message(result, "generate_code")
+    return Command(
+        update=state_after_update,
+        goto="supervisor",
+    )
 
 
 def list_repository_branches_agent(state: SharedState) -> Command[Literal["supervisor"]]:
+    """
+        Agent for listing branches of a GitHub repository.
+        """
     agent = create_react_agent(llm, tools=[list_repo_branches_tool],
                                prompt=list_repository_branches_prompt)
+    repo_name = input("Enter the name of the repository: ")
+
     print(f"----------LIST REPO BRANCHES STATE------------: \n{state}")
-    result = agent.invoke(state)
+    result = agent.invoke(state, interrupt_before=['tools'])
     print(f"----------RESULT------------: \n{result}")
-    tool_messages = [i for i in result['messages'] if isinstance(i, ToolMessage)]
-    if tool_messages:
-        tool_message = tool_messages[-1]
-        try:
-            data = json.loads(tool_message.content)
-            print(f"----------DATA------------: \n{data}")
-            updated_state = {}
-            for key, value in data.items():
-                updated_state[key] = value
-            updated_state['messages'] = [HumanMessage(content=result['messages'][-1].content, name="generate_code")]
-            return Command(
-                update=updated_state,
-                goto="supervisor",
-            )
-        except Exception as error:
-            print(f"Error while parsing JSON: {error}")
-            breakpoint()
-            updated_state = {}
-            updated_state['messages'] = [HumanMessage(content=result['messages'][-1].content, name="generate_code")]
-            return Command(
-                update=updated_state,
-                goto="supervisor",
-            )
-    else:
-        print(
-            "<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< NO tool call >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
-        return Command(
-            update={
-                "messages": [HumanMessage(content=result['messages'][-1].content, name="list_repo_branches")],
-            },
-            goto="supervisor",
-        )
+    state_after_update = update_state_from_tool_message(result, "list_repo_branches")
+    return Command(
+        update=state_after_update,
+        goto="supervisor",
+    )
 
 
-def general_agent(state: SharedState) -> Command[
-    Literal["supervisor"]]:
+def general_agent(state: SharedState) -> Command[Literal["supervisor"]]:
+    """
+    General-purpose agent for handling miscellaneous tasks.
+    """
     agent = create_react_agent(llm, tools=[], prompt=general_agent_prompt)
-    print(f"---------- README AGENT STATE------------: \n{state}")
+    print(f"---------- GENERAL AGENT STATE------------: \n{state}")
     result = agent.invoke(state)
     print(f"----------RESULT------------: \n{result}")
-    tool_messages = [i for i in result['messages'] if isinstance(i, ToolMessage)]
-    if tool_messages:
-        tool_message = tool_messages[-1]
-        try:
-            data = json.loads(tool_message.content)
-            print(f"----------DATA------------: \n{data}")
-            updated_state = {}
-            for key, value in data.items():
-                updated_state[key] = value
-            updated_state['messages'] = [HumanMessage(content=result['messages'][-1].content, name="generate_code")]
-            return Command(
-                update=updated_state,
-                goto="supervisor",
-            )
-        except Exception as error:
-            print(f"Error while parsing JSON: {error}")
-            breakpoint()
-            updated_state = {}
-            updated_state['messages'] = [HumanMessage(content=result['messages'][-1].content, name="generate_code")]
-            return Command(
-                update=updated_state,
-                goto="supervisor",
-            )
-    else:
-        print(
-            "<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< NO tool call >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
-        return Command(
-            update={"messages": [HumanMessage(content=result['messages'][-1].content, name="generate_code")]},
-            goto="supervisor",
-        )
+    state_after_update = update_state_from_tool_message(result, "general_assistant")
+    return Command(
+        update=state_after_update,
+        goto="supervisor",
+    )
 
 
 def supervisor_agent(state: SharedState) -> Command[
     Literal["create_repo", "create_readme_file", "create_commit", "generate_code", "__end__"]]:
+    """
+    Supervisor agent to orchestrate task execution by delegating to other agents.
+    """
     messages = [{"role": "system", "content": supervisor_prompt}] + state["messages"]
     response = llm.with_structured_output(Router).invoke(messages)
     print(
@@ -654,7 +563,9 @@ def supervisor_agent(state: SharedState) -> Command[
     return Command(goto=goto, update={"next": goto})
 
 
+# Build the state graph for the workflow
 builder = StateGraph(SharedState)
+# Add nodes and edges to the state graph
 builder.add_node("supervisor", supervisor_agent)
 builder.add_node("create_repo", create_repo_agent)
 builder.add_node("create_readme_file", readme_agent)
@@ -664,10 +575,22 @@ builder.add_node("list_repo_branches", list_repository_branches_agent)
 builder.add_node("general_assistant", general_agent)
 
 builder.add_edge(START, "supervisor")
-import streamlit as st
 
-st.header("Github Automation")
-graph = builder.compile(checkpointer=memory)
+# Initialize memory and checkpointing
+# memory = MemorySaver()
+# in_memory_store = InMemoryStore()
+conn = sqlite3.connect("checkpoints.sqlite", check_same_thread=False)
+sql_memory = SqliteSaver(conn)
+
+namespace_for_memory = (1, "memories")
+user_id = "1"
+thread_id = "1"
+config = {"thread_id": thread_id, "user_id": user_id}
+
+# Compile the state graph
+graph = builder.compile(checkpointer=sql_memory)
+
+# Streamlit UI for user input and workflow execution
 query = st.text_input("Enter the query here: ")
 if st.button("Run"):
     # Create a placeholder to display output; you can use st.empty() to update as you go.
@@ -678,7 +601,7 @@ if st.button("Run"):
     final_output = ""
     steps = []
     text_steps = []
-    # Optional: use a spinner to indicate processing
+
     with st.spinner("Running the workflow..."):
         for output in graph.stream({
             "messages": [
@@ -695,7 +618,7 @@ if st.button("Run"):
             "commit_message": None,
             "file_path": "",
             "organization_name": None
-        }, config=RunnableConfig(recursion_limit=16, configurable={"thread_id": "1"})):
+        }, config=RunnableConfig(recursion_limit=50, configurable=config)):
             steps.append(output)
 
             if 'supervisor' not in output.keys():
