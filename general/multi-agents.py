@@ -29,7 +29,7 @@ class Router(TypedDict):
     next: Literal[*supervisor_next_nodes]
 
 
-def genereate_token_usage_str(cb):
+def generate_token_usage_str(cb):
     print(f"Total Tokens Used: {cb.total_tokens}")
     print(f"Prompt Tokens: {cb.prompt_tokens}")
     print(f"Completion Tokens: {cb.completion_tokens}")
@@ -43,7 +43,7 @@ def genereate_token_usage_str(cb):
 def create_repo_agent(state: SharedState) -> Command[Literal["supervisor"]]:
     result = CreateGitHubRepoAgent().create_agent().invoke(state, config={"callbacks":[callback_handler]})
     print(f"----------RESULT------------: \n{result}")
-    token_data = genereate_token_usage_str(callback_handler)
+    token_data = generate_token_usage_str(callback_handler)
     return_message = [HumanMessage(content=result['messages'][-1].content, name="create_repo")]
     tool_messages = [i for i in result['messages'] if isinstance(i, ToolMessage)]
     # if tool_messages:
@@ -70,7 +70,7 @@ def create_repo_agent(state: SharedState) -> Command[Literal["supervisor"]]:
 def readme_agent(state: SharedState) -> Command[Literal["supervisor"]]:
     result = CreateGitHubRepoAgent().create_agent().invoke(state, config={"callbacks":[callback_handler]})
     print(f"----------RESULT------------: \n{result}")
-    token_data = genereate_token_usage_str(callback_handler)
+    token_data = generate_token_usage_str(callback_handler)
     return_message = [HumanMessage(content=result['messages'][-1].content, name="create_repo")]
     tool_messages = [i for i in result['messages'] if isinstance(i, ToolMessage)]
     # if tool_messages:
@@ -97,7 +97,7 @@ def readme_agent(state: SharedState) -> Command[Literal["supervisor"]]:
 def create_commit_agent(state: SharedState) -> Command[Literal["supervisor"]]:
     result = CreateGitHubRepoAgent().create_agent().invoke(state, config={"callbacks":[callback_handler]})
     print(f"----------RESULT------------: \n{result}")
-    token_data = genereate_token_usage_str(callback_handler)
+    token_data = generate_token_usage_str(callback_handler)
     return_message = [HumanMessage(content=result['messages'][-1].content, name="create_repo")]
     tool_messages = [i for i in result['messages'] if isinstance(i, ToolMessage)]
     # if tool_messages:
@@ -124,7 +124,7 @@ def create_commit_agent(state: SharedState) -> Command[Literal["supervisor"]]:
 def generate_code_agent(state: SharedState) -> Command[Literal["supervisor"]]:
     result = CreateGitHubRepoAgent().create_agent().invoke(state, config={"callbacks":[callback_handler]})
     print(f"----------RESULT------------: \n{result}")
-    token_data = genereate_token_usage_str(callback_handler)
+    token_data = generate_token_usage_str(callback_handler)
     return_message = [HumanMessage(content=result['messages'][-1].content, name="create_repo")]
     tool_messages = [i for i in result['messages'] if isinstance(i, ToolMessage)]
     # if tool_messages:
@@ -154,7 +154,7 @@ def supervisor_node(state: SharedState) -> Command[Literal[*agent_nodes, "__end_
         "messages"]
     result = supervisor_agent.llm.with_structured_output(Router).invoke(messages)
     print(f"----------RESULT------------: \n{result}")
-    token_data = genereate_token_usage_str(callback_handler)
+    token_data = generate_token_usage_str(callback_handler)
 
     goto = result['next']
     if goto == "FINISH":
